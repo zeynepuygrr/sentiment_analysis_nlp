@@ -188,3 +188,151 @@ app = gr.Interface(
 )
 
 app.launch()
+
+!pip install transformers
+
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import torch
+from torch.utils.data import DataLoader, TensorDataset
+import torch.optim as optim
+
+# Tokenizer ve model yükle
+tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
+
+print("Tokenizer yüklendi!")
+
+# Eğitim ve test metinlerini tokenize et
+def tokenize_data(texts, labels, max_length=256):
+    encodings = tokenizer(
+        list(texts),
+        truncation=True,
+        padding=True,
+        max_length=max_length,
+        return_tensors="pt"
+    )
+    return encodings, torch.tensor(list(labels), dtype=torch.long)
+
+train_encodings, train_labels = tokenize_data(train_df["text"], train_df["label"])
+test_encodings, test_labels = tokenize_data(test_df["text"], test_df["label"])
+
+print("Tokenization tamamlandı!")
+print("Train shape:", train_encodings["input_ids"].shape)
+print("Test shape:", test_encodings["input_ids"].shape)
+
+from torch.utils.data import DataLoader, TensorDataset
+
+# Dataset oluştur
+train_dataset = TensorDataset(
+    train_encodings["input_ids"],
+    train_encodings["attention_mask"],
+    train_labels
+)
+
+test_dataset = TensorDataset(
+    test_encodings["input_ids"],
+    test_encodings["attention_mask"],
+    test_labels
+)
+
+train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
+test_loader = DataLoader(test_dataset, batch_size=16)
+
+print("DataLoader hazır!")
+print("Train batch sayısı:", len(train_loader))
+
+from transformers import AutoModelForSequenceClassification
+
+# DistilBERT modelini yükle
+distilbert_model = AutoModelForSequenceClassification.from_pretrained(
+    "distilbert-base-uncased",
+    num_labels=2
+)
+
+# GPU'ya taşı
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+distilbert_model = distilbert_model.to(device)
+
+print("Model yüklendi!")
+print("Kullanılan cihaz:", device)
+
+from torch.optim import AdamW
+
+optimizer = AdamW(distilbert_model.parameters(), lr=2e-5)
+
+num_epochs = 3
+
+for epoch in range(num_epochs):
+    distilbert_model.train()
+    total_loss = 0
+
+    for batch in train_loader:
+        input_ids, attention_mask, labels = [b.to(device) for b in batch]
+
+        optimizer.zero_grad()
+        outputs = distilbert_model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
+        loss = outputs.loss
+        loss.backward()
+        optimizer.step()
+
+        total_loss += loss.item()
+
+    avg_loss = total_loss / len(train_loader)
+    print(f"Epoch {epoch+1}/{num_epochs}, Loss: {avg_loss:.4f}")
+
+print("Eğitim tamamlandı!")
+
+from sklearn.metrics import accuracy_score, classification_report
+
+distilbert_model.eval()
+all_preds = []
+all_labels = []
+
+with torch.no_grad():
+    for batch in test_loader:
+        input_ids, attention_mask, labels = [b.to(device) for b in batch]
+        outputs = distilbert_model(input_ids=input_ids, attention_mask=attention_mask)
+        preds = torch.argmax(outputs.logits, dim=1)
+        all_preds.extend(preds.cpu().numpy())
+        all_labels.extend(labels.cpu().numpy())
+
+accuracy = accuracy_score(all_labels, all_preds)
+print("DistilBERT Test Accuracy:", accuracy)
+print("\nClassification Report:")
+print(classification_report(all_labels, all_preds))
+
+import gradio as gr
+
+def predict_distilbert(text):
+    cleaned = clean_text(text)
+    inputs = tokenizer(
+        cleaned,
+        return_tensors="pt",
+        truncation=True,
+        padding=True,
+        max_length=256
+    )
+    inputs = {k: v.to(device) for k, v in inputs.items()}
+
+    distilbert_model.eval()
+    with torch.no_grad():
+        outputs = distilbert_model(**inputs)
+        probs = torch.softmax(outputs.logits, dim=1)
+        pred = torch.argmax(probs, dim=1).item()
+        confidence = probs[0][pred].item()
+
+    label = "Positive 😊" if pred == 1 else "Negative 😞"
+    return f"{label} (Confidence: {confidence:.1%})"
+
+app2 = gr.Interface(
+    fn=predict_distilbert,
+    inputs=gr.Textbox(
+        lines=4,
+        placeholder="Write a movie review here...",
+        label="Movie Review"
+    ),
+    outputs=gr.Textbox(label="Sentiment"),
+    title="🎬 Sentiment Analysis - DistilBERT",
+    description="Advanced transformer-based sentiment analysis. Enter a movie review to classify it."
+)
+
+app2.launch()
