@@ -115,13 +115,17 @@ optimizer = optim.Adam(model.parameters(), lr=0.001)
 
 print("Hazır")
 
+# Modeli sıfırla
+model = SentimentNet(input_size)
+optimizer = optim.Adam(model.parameters(), lr=0.001)
+
 from torch.utils.data import DataLoader, TensorDataset
 
 # Dataset ve DataLoader oluştur
 train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
 train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 
-num_epochs = 20
+num_epochs = 5
 
 for epoch in range(num_epochs):
     model.train()
